@@ -1,0 +1,746 @@
+# Module 1: Initial Setup & Sequential Compression Guide
+
+## Project Overview
+This module establishes the foundation for a GUI-based parallel file compression system. You'll implement file chunking, sequential compression using zlib, and a basic Tkinter GUI.
+
+## 1. Environment Setup
+
+### Prerequisites
+- Python 3.8+ (recommended: Python 3.9 or higher)
+- Required libraries (all built-in): `tkinter`, `zlib`, `os`, `threading`, `queue`
+
+### Project Structure
+Create the following directory structure:
+```
+parallel_compressor/
+├── src/
+│   ├── __init__.py
+│   ├── compressor.py
+│   ├── gui.py
+│   └── utils.py
+├── tests/
+│   └── test_files/
+├── output/
+├── requirements.txt
+└── main.py
+```
+
+### Setup Commands
+```bash
+# Create project directory
+mkdir parallel_compressor
+cd parallel_compressor
+
+# Create subdirectories
+mkdir src tests tests/test_files output
+
+# Create virtual environment (optional but recommended)
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Create requirements.txt (minimal for Module 1)
+echo "# Built-in libraries only for Module 1" > requirements.txt
+```
+
+## 2. Core Components Implementation
+
+### 2.1 File Chunking Implementation (`src/utils.py`)
+
+```python
+import os
+import zlib
+from typing import Iterator, Tuple
+
+class FileChunker:
+    """Handles reading large files in manageable chunks."""
+    
+    def __init__(self, chunk_size: int = 1024 * 1024):  # Default 1MB chunks
+        self.chunk_size = chunk_size
+    
+    def read_chunks(self, file_path: str) -> Iterator[bytes]:
+        """Generator that yields file chunks."""
+        with open(file_path, 'rb') as file:
+            while True:
+                chunk = file.read(self.chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+    
+    def get_file_info(self, file_path: str) -> Tuple[int, int]:
+        """Returns (file_size, estimated_chunks)."""
+        file_size = os.path.getsize(file_path)
+        estimated_chunks = (file_size + self.chunk_size - 1) // self.chunk_size
+        return file_size, estimated_chunks
+```
+
+### 2.2 Sequential Compression Engine (`src/compressor.py`)
+
+```python
+import zlib
+import struct
+import os
+from typing import Callable, Optional
+from .utils import FileChunker
+
+class SequentialCompressor:
+    """Sequential file compression using zlib."""
+    
+    def __init__(self, chunk_size: int = 1024 * 1024):
+        self.chunker = FileChunker(chunk_size)
+        self.compression_level = 6  # Default zlib compression level
+    
+    def compress_file(self, input_path: str, output_path: str, 
+                     progress_callback: Optional[Callable] = None) -> bool:
+        """
+        Compress file sequentially.
+        
+        Args:
+            input_path: Path to input file
+            output_path: Path to output .pzip file
+            progress_callback: Function to call with progress updates
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            file_size, total_chunks = self.chunker.get_file_info(input_path)
+            
+            with open(output_path, 'wb') as output_file:
+                # Write file header
+                self._write_header(output_file, file_size, total_chunks)
+                
+                # Compress chunks sequentially
+                chunk_count = 0
+                for chunk in self.chunker.read_chunks(input_path):
+                    compressed_chunk = zlib.compress(chunk, self.compression_level)
+                    
+                    # Write chunk size and compressed data
+                    self._write_chunk(output_file, compressed_chunk)
+                    
+                    chunk_count += 1
+                    if progress_callback:
+                        progress = (chunk_count / total_chunks) * 100
+                        progress_callback(f"Compressing chunk {chunk_count}/{total_chunks}", progress)
+            
+            return True
+            
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"Error: {str(e)}", 0)
+            return False
+    
+    def decompress_file(self, input_path: str, output_path: str,
+                       progress_callback: Optional[Callable] = None) -> bool:
+        """
+        Decompress .pzip file.
+        
+        Args:
+            input_path: Path to .pzip file
+            output_path: Path to output file
+            progress_callback: Function to call with progress updates
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            with open(input_path, 'rb') as input_file:
+                # Read header
+                original_size, total_chunks = self._read_header(input_file)
+                
+                with open(output_path, 'wb') as output_file:
+                    chunk_count = 0
+                    
+                    for _ in range(total_chunks):
+                        # Read chunk
+                        compressed_chunk = self._read_chunk(input_file)
+                        if compressed_chunk is None:
+                            break
+                        
+                        # Decompress and write
+                        decompressed_chunk = zlib.decompress(compressed_chunk)
+                        output_file.write(decompressed_chunk)
+                        
+                        chunk_count += 1
+                        if progress_callback:
+                            progress = (chunk_count / total_chunks) * 100
+                            progress_callback(f"Decompressing chunk {chunk_count}/{total_chunks}", progress)
+            
+            return True
+            
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"Error: {str(e)}", 0)
+            return False
+    
+    def _write_header(self, file, original_size: int, total_chunks: int):
+        """Write file header with metadata."""
+        # Magic bytes: 'PZIP'
+        file.write(b'PZIP')
+        # Version: 1
+        file.write(struct.pack('<I', 1))
+        # Original file size
+        file.write(struct.pack('<Q', original_size))
+        # Total chunks
+        file.write(struct.pack('<I', total_chunks))
+        # Chunk size
+        file.write(struct.pack('<I', self.chunker.chunk_size))
+    
+    def _write_chunk(self, file, compressed_data: bytes):
+        """Write compressed chunk with size prefix."""
+        chunk_size = len(compressed_data)
+        file.write(struct.pack('<I', chunk_size))
+        file.write(compressed_data)
+    
+    def _read_header(self, file) -> Tuple[int, int]:
+        """Read file header and return (original_size, total_chunks)."""
+        magic = file.read(4)
+        if magic != b'PZIP':
+            raise ValueError("Invalid file format")
+        
+        version = struct.unpack('<I', file.read(4))[0]
+        original_size = struct.unpack('<Q', file.read(8))[0]
+        total_chunks = struct.unpack('<I', file.read(4))[0]
+        chunk_size = struct.unpack('<I', file.read(4))[0]
+        
+        return original_size, total_chunks
+    
+    def _read_chunk(self, file) -> Optional[bytes]:
+        """Read compressed chunk."""
+        size_data = file.read(4)
+        if len(size_data) < 4:
+            return None
+        
+        chunk_size = struct.unpack('<I', size_data)[0]
+        return file.read(chunk_size)
+```
+
+### 2.3 GUI Implementation (`src/gui.py`)
+
+```python
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import threading
+import queue
+import os
+from .compressor import SequentialCompressor
+
+class CompressionGUI:
+    """Main GUI for the compression application."""
+    
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Parallel File Compressor - Module 1")
+        self.root.geometry("600x400")
+        
+        # Initialize compressor
+        self.compressor = SequentialCompressor()
+        
+        # Progress queue for thread communication
+        self.progress_queue = queue.Queue()
+        
+        # Variables
+        self.input_file = tk.StringVar()
+        self.output_file = tk.StringVar()
+        
+        self.setup_ui()
+        self.check_progress_queue()
+    
+    def setup_ui(self):
+        """Create the user interface."""
+        # Main frame
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Configure grid weights
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=1)
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="File Compression Tool", 
+                               font=('Arial', 16, 'bold'))
+        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20))
+        
+        # Input file selection
+        ttk.Label(main_frame, text="Input File:").grid(row=1, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.input_file, width=50).grid(
+            row=1, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
+        ttk.Button(main_frame, text="Browse", 
+                  command=self.browse_input_file).grid(row=1, column=2, pady=5)
+        
+        # Output file selection
+        ttk.Label(main_frame, text="Output File:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        ttk.Entry(main_frame, textvariable=self.output_file, width=50).grid(
+            row=2, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
+        ttk.Button(main_frame, text="Browse", 
+                  command=self.browse_output_file).grid(row=2, column=2, pady=5)
+        
+        # Compression options frame
+        options_frame = ttk.LabelFrame(main_frame, text="Options", padding="5")
+        options_frame.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        options_frame.columnconfigure(1, weight=1)
+        
+        # Chunk size selection
+        ttk.Label(options_frame, text="Chunk Size:").grid(row=0, column=0, sticky=tk.W)
+        self.chunk_size_var = tk.StringVar(value="1MB")
+        chunk_combo = ttk.Combobox(options_frame, textvariable=self.chunk_size_var,
+                                  values=["512KB", "1MB", "2MB", "4MB", "8MB"],
+                                  state="readonly", width=10)
+        chunk_combo.grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
+        
+        # Action buttons frame
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=4, column=0, columnspan=3, pady=20)
+        
+        self.compress_btn = ttk.Button(button_frame, text="Compress File", 
+                                      command=self.start_compression)
+        self.compress_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        self.decompress_btn = ttk.Button(button_frame, text="Decompress File", 
+                                        command=self.start_decompression)
+        self.decompress_btn.pack(side=tk.LEFT)
+        
+        # Progress section
+        progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding="5")
+        progress_frame.grid(row=5, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=10)
+        progress_frame.columnconfigure(0, weight=1)
+        
+        # Progress bar
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, 
+                                           maximum=100)
+        self.progress_bar.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
+        
+        # Status label
+        self.status_var = tk.StringVar(value="Ready")
+        self.status_label = ttk.Label(progress_frame, textvariable=self.status_var)
+        self.status_label.grid(row=1, column=0, sticky=tk.W)
+        
+        # Log area
+        log_frame = ttk.LabelFrame(main_frame, text="Log", padding="5")
+        log_frame.grid(row=6, column=0, columnspan=3, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10)
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        main_frame.rowconfigure(6, weight=1)
+        
+        # Text widget with scrollbar
+        self.log_text = tk.Text(log_frame, height=8, wrap=tk.WORD)
+        scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=scrollbar.set)
+        
+        self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+    
+    def browse_input_file(self):
+        """Open file dialog for input file selection."""
+        filename = filedialog.askopenfilename(
+            title="Select file to compress",
+            filetypes=[("All files", "*.*")]
+        )
+        if filename:
+            self.input_file.set(filename)
+            # Auto-suggest output filename
+            base_name = os.path.splitext(filename)[0]
+            self.output_file.set(f"{base_name}.pzip")
+    
+    def browse_output_file(self):
+        """Open file dialog for output file selection."""
+        input_path = self.input_file.get()
+        if input_path:
+            default_name = os.path.splitext(input_path)[0] + ".pzip"
+        else:
+            default_name = "compressed.pzip"
+        
+        filename = filedialog.asksaveasfilename(
+            title="Save compressed file as",
+            defaultextension=".pzip",
+            filetypes=[("PZIP files", "*.pzip"), ("All files", "*.*")],
+            initialvalue=os.path.basename(default_name)
+        )
+        if filename:
+            self.output_file.set(filename)
+    
+    def get_chunk_size_bytes(self) -> int:
+        """Convert chunk size string to bytes."""
+        size_str = self.chunk_size_var.get()
+        size_map = {
+            "512KB": 512 * 1024,
+            "1MB": 1024 * 1024,
+            "2MB": 2 * 1024 * 1024,
+            "4MB": 4 * 1024 * 1024,
+            "8MB": 8 * 1024 * 1024
+        }
+        return size_map.get(size_str, 1024 * 1024)
+    
+    def log_message(self, message: str):
+        """Add message to log area."""
+        self.log_text.insert(tk.END, f"{message}\n")
+        self.log_text.see(tk.END)
+        self.root.update_idletasks()
+    
+    def progress_callback(self, message: str, percentage: float):
+        """Callback for progress updates from compression thread."""
+        self.progress_queue.put(('progress', message, percentage))
+    
+    def check_progress_queue(self):
+        """Check for progress updates from background thread."""
+        try:
+            while True:
+                item = self.progress_queue.get_nowait()
+                if item[0] == 'progress':
+                    _, message, percentage = item
+                    self.status_var.set(message)
+                    self.progress_var.set(percentage)
+                    self.log_message(message)
+                elif item[0] == 'complete':
+                    _, success, message = item
+                    self.status_var.set(message)
+                    self.progress_var.set(100 if success else 0)
+                    self.log_message(message)
+                    self.enable_buttons()
+                    if success:
+                        messagebox.showinfo("Success", message)
+                    else:
+                        messagebox.showerror("Error", message)
+        except queue.Empty:
+            pass
+        
+        # Schedule next check
+        self.root.after(100, self.check_progress_queue)
+    
+    def disable_buttons(self):
+        """Disable action buttons during operation."""
+        self.compress_btn.config(state='disabled')
+        self.decompress_btn.config(state='disabled')
+    
+    def enable_buttons(self):
+        """Enable action buttons after operation."""
+        self.compress_btn.config(state='normal')
+        self.decompress_btn.config(state='normal')
+    
+    def start_compression(self):
+        """Start compression in background thread."""
+        input_path = self.input_file.get().strip()
+        output_path = self.output_file.get().strip()
+        
+        if not input_path or not output_path:
+            messagebox.showerror("Error", "Please select both input and output files.")
+            return
+        
+        if not os.path.exists(input_path):
+            messagebox.showerror("Error", "Input file does not exist.")
+            return
+        
+        # Update compressor chunk size
+        chunk_size = self.get_chunk_size_bytes()
+        self.compressor = SequentialCompressor(chunk_size)
+        
+        self.disable_buttons()
+        self.progress_var.set(0)
+        self.log_message(f"Starting compression of: {os.path.basename(input_path)}")
+        
+        # Start compression in background thread
+        thread = threading.Thread(target=self._compression_worker, 
+                                 args=(input_path, output_path))
+        thread.daemon = True
+        thread.start()
+    
+    def start_decompression(self):
+        """Start decompression in background thread."""
+        input_path = self.input_file.get().strip()
+        
+        if not input_path or not input_path.endswith('.pzip'):
+            messagebox.showerror("Error", "Please select a .pzip file to decompress.")
+            return
+        
+        if not os.path.exists(input_path):
+            messagebox.showerror("Error", "Input file does not exist.")
+            return
+        
+        # Auto-suggest output filename
+        base_name = os.path.splitext(input_path)[0]
+        output_path = filedialog.asksaveasfilename(
+            title="Save decompressed file as",
+            initialvalue=os.path.basename(base_name)
+        )
+        
+        if not output_path:
+            return
+        
+        self.disable_buttons()
+        self.progress_var.set(0)
+        self.log_message(f"Starting decompression of: {os.path.basename(input_path)}")
+        
+        # Start decompression in background thread
+        thread = threading.Thread(target=self._decompression_worker, 
+                                 args=(input_path, output_path))
+        thread.daemon = True
+        thread.start()
+    
+    def _compression_worker(self, input_path: str, output_path: str):
+        """Background worker for compression."""
+        try:
+            success = self.compressor.compress_file(input_path, output_path, 
+                                                   self.progress_callback)
+            if success:
+                original_size = os.path.getsize(input_path)
+                compressed_size = os.path.getsize(output_path)
+                ratio = (1 - compressed_size / original_size) * 100
+                message = f"Compression completed! Saved {ratio:.1f}% space."
+            else:
+                message = "Compression failed."
+            
+            self.progress_queue.put(('complete', success, message))
+            
+        except Exception as e:
+            self.progress_queue.put(('complete', False, f"Compression error: {str(e)}"))
+    
+    def _decompression_worker(self, input_path: str, output_path: str):
+        """Background worker for decompression."""
+        try:
+            success = self.compressor.decompress_file(input_path, output_path, 
+                                                     self.progress_callback)
+            message = "Decompression completed!" if success else "Decompression failed."
+            self.progress_queue.put(('complete', success, message))
+            
+        except Exception as e:
+            self.progress_queue.put(('complete', False, f"Decompression error: {str(e)}"))
+
+def create_gui():
+    """Create and return the main GUI window."""
+    root = tk.Tk()
+    app = CompressionGUI(root)
+    return root, app
+```
+
+### 2.4 Main Application Entry Point (`main.py`)
+
+```python
+#!/usr/bin/env python3
+"""
+Parallel File Compressor - Module 1
+Sequential compression with GUI interface.
+"""
+
+import sys
+import os
+
+# Add src directory to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
+from src.gui import create_gui
+
+def main():
+    """Main application entry point."""
+    try:
+        root, app = create_gui()
+        
+        # Center window on screen
+        root.update_idletasks()
+        width = root.winfo_width()
+        height = root.winfo_height()
+        x = (root.winfo_screenwidth() // 2) - (width // 2)
+        y = (root.winfo_screenheight() // 2) - (height // 2)
+        root.geometry(f"{width}x{height}+{x}+{y}")
+        
+        print("Starting Parallel File Compressor GUI...")
+        root.mainloop()
+        
+    except KeyboardInterrupt:
+        print("\nApplication interrupted by user.")
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error starting application: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+```
+
+### 2.5 Package Initialization (`src/__init__.py`)
+
+```python
+"""
+Parallel File Compressor Package
+Module 1: Sequential Compression with GUI
+"""
+
+__version__ = "1.0.0"
+__author__ = "Your Name"
+
+from .compressor import SequentialCompressor
+from .utils import FileChunker
+from .gui import CompressionGUI, create_gui
+
+__all__ = ['SequentialCompressor', 'FileChunker', 'CompressionGUI', 'create_gui']
+```
+
+## 3. Testing & Validation
+
+### 3.1 Create Test Files
+
+```bash
+# Create test files of various sizes
+cd tests/test_files
+
+# Small text file
+echo "This is a test file for compression." > small_test.txt
+
+# Medium text file (repeat content)
+for i in {1..1000}; do echo "Line $i: This is test data for compression testing." >> medium_test.txt; done
+
+# Large file (if you have one available, or create programmatically)
+python -c "
+with open('large_test.txt', 'w') as f:
+    for i in range(100000):
+        f.write(f'This is line {i} with some repeated content for better compression ratios.\\n')
+"
+```
+
+### 3.2 Basic Test Script (`tests/test_basic.py`)
+
+```python
+#!/usr/bin/env python3
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+from compressor import SequentialCompressor
+import time
+
+def test_compression():
+    """Basic compression test."""
+    compressor = SequentialCompressor(chunk_size=1024*1024)  # 1MB chunks
+    
+    test_file = "tests/test_files/medium_test.txt"
+    output_file = "output/test_compressed.pzip"
+    decompressed_file = "output/test_decompressed.txt"
+    
+    if not os.path.exists(test_file):
+        print("Test file not found. Please create test files first.")
+        return
+    
+    print(f"Testing compression of: {test_file}")
+    
+    # Test compression
+    start_time = time.time()
+    success = compressor.compress_file(test_file, output_file)
+    compression_time = time.time() - start_time
+    
+    if success:
+        original_size = os.path.getsize(test_file)
+        compressed_size = os.path.getsize(output_file)
+        ratio = (1 - compressed_size / original_size) * 100
+        
+        print(f"✓ Compression successful in {compression_time:.2f}s")
+        print(f"  Original size: {original_size:,} bytes")
+        print(f"  Compressed size: {compressed_size:,} bytes")
+        print(f"  Compression ratio: {ratio:.1f}%")
+        
+        # Test decompression
+        start_time = time.time()
+        success = compressor.decompress_file(output_file, decompressed_file)
+        decompression_time = time.time() - start_time
+        
+        if success:
+            print(f"✓ Decompression successful in {decompression_time:.2f}s")
+            
+            # Verify integrity
+            with open(test_file, 'rb') as f1, open(decompressed_file, 'rb') as f2:
+                if f1.read() == f2.read():
+                    print("✓ File integrity verified - files match perfectly!")
+                else:
+                    print("✗ File integrity check failed!")
+        else:
+            print("✗ Decompression failed")
+    else:
+        print("✗ Compression failed")
+
+if __name__ == "__main__":
+    # Ensure output directory exists
+    os.makedirs("output", exist_ok=True)
+    test_compression()
+```
+
+## 4. Running the Application
+
+### 4.1 Command Line Test
+```bash
+# Test the compression engine
+python tests/test_basic.py
+```
+
+### 4.2 GUI Application
+```bash
+# Run the main GUI application
+python main.py
+```
+
+## 5. Module 1 Features Checklist
+
+- ✅ **File Chunking**: Implemented with configurable chunk sizes
+- ✅ **Sequential Compression**: Using zlib with adjustable compression level
+- ✅ **Basic GUI**: Input/output file selection, compress button
+- ✅ **Progress Updates**: Progress bar and status messages
+- ✅ **Background Processing**: Non-blocking GUI using threading
+- ✅ **File Format**: Custom .pzip format with metadata headers
+- ✅ **Error Handling**: Comprehensive error catching and user feedback
+
+## 6. Key Implementation Details
+
+### File Format (.pzip)
+```
+Header (24 bytes):
+- Magic bytes: 'PZIP' (4 bytes)
+- Version: uint32 (4 bytes)
+- Original file size: uint64 (8 bytes)
+- Total chunks: uint32 (4 bytes)
+- Chunk size: uint32 (4 bytes)
+
+Chunks:
+- Chunk size: uint32 (4 bytes)
+- Compressed data: variable length
+```
+
+### Threading Architecture
+- Main thread: GUI operations and user interaction
+- Background thread: File compression/decompression
+- Queue-based communication: Progress updates between threads
+
+## 7. Testing Workflow
+
+1. **Run Basic Test**: Execute `python tests/test_basic.py`
+2. **GUI Testing**:
+   - Launch GUI: `python main.py`
+   - Select a test file
+   - Choose output location
+   - Click "Compress File"
+   - Verify progress updates work
+   - Test decompression
+3. **Verify Results**:
+   - Check compression ratios
+   - Confirm file integrity
+   - Test with different chunk sizes
+
+## 8. Next Steps for Module 2
+
+After completing Module 1, you'll be ready to implement:
+- Parallel processing using `multiprocessing.Pool`
+- Worker process management
+- Chunk distribution across cores
+- Performance comparison tools
+
+## 9. Troubleshooting
+
+### Common Issues:
+- **Import errors**: Ensure you're running from the project root directory
+- **File permissions**: Check read/write permissions for input/output directories
+- **Large files**: Start with smaller test files (< 100MB) for initial testing
+- **GUI freezing**: Verify threading implementation is working correctly
+
+### Performance Notes:
+- Sequential compression in Module 1 serves as baseline for parallel comparison
+- Chunk size affects both memory usage and compression efficiency
+- Text files typically compress better than binary files
+
+This completes Module 1! You now have a working sequential file compressor with a functional GUI that serves as the foundation for implementing parallel processing in Module 2.
