@@ -11,7 +11,7 @@ class CompressionGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Parallel File Compressor - Module 1")
-        self.root.geometry("600x400")
+        self.root.geometry("700x500")
         
         # Initialize compressor
         self.compressor = SequentialCompressor()
@@ -22,6 +22,9 @@ class CompressionGUI:
         # Variables
         self.input_file = tk.StringVar()
         self.output_file = tk.StringVar()
+        
+        # Operation state
+        self.current_operation = None  # 'compress' or 'decompress'
         
         self.setup_ui()
         self.check_progress_queue()
@@ -44,15 +47,15 @@ class CompressionGUI:
         
         # Input file selection
         ttk.Label(main_frame, text="Input File:").grid(row=1, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.input_file, width=50).grid(
-            row=1, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
+        input_entry = ttk.Entry(main_frame, textvariable=self.input_file, width=50)
+        input_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
         ttk.Button(main_frame, text="Browse", 
                   command=self.browse_input_file).grid(row=1, column=2, pady=5)
         
         # Output file selection
         ttk.Label(main_frame, text="Output File:").grid(row=2, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(main_frame, textvariable=self.output_file, width=50).grid(
-            row=2, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
+        output_entry = ttk.Entry(main_frame, textvariable=self.output_file, width=50)
+        output_entry.grid(row=2, column=1, sticky=(tk.W, tk.E), padx=(5, 5), pady=5)
         ttk.Button(main_frame, text="Browse", 
                   command=self.browse_output_file).grid(row=2, column=2, pady=5)
         
@@ -80,6 +83,11 @@ class CompressionGUI:
         self.decompress_btn = ttk.Button(button_frame, text="Decompress File", 
                                         command=self.start_decompression)
         self.decompress_btn.pack(side=tk.LEFT)
+        
+        # Quick decompress button (selects .pzip automatically)
+        self.quick_decompress_btn = ttk.Button(button_frame, text="Quick Decompress", 
+                                             command=self.quick_decompress)
+        self.quick_decompress_btn.pack(side=tk.LEFT, padx=(10, 0))
         
         # Progress section
         progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding="5")
@@ -111,35 +119,76 @@ class CompressionGUI:
         
         self.log_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        # Add initial help message
+        self.log_message("Welcome to File Compression Tool!")
+        self.log_message("1. Select a file to compress OR select a .pzip file to decompress")
+        self.log_message("2. Choose output location")
+        self.log_message("3. Click appropriate button")
+        self.log_message("-" * 50)
     
     def browse_input_file(self):
         """Open file dialog for input file selection."""
         filename = filedialog.askopenfilename(
-            title="Select file to compress",
-            filetypes=[("All files", "*.*")]
+            title="Select file to compress or .pzip file to decompress",
+            filetypes=[
+                ("All files", "*.*"),
+                ("PZIP files", "*.pzip"),
+                ("Text files", "*.txt"),
+                ("Image files", "*.jpg;*.png;*.gif"),
+                ("Document files", "*.pdf;*.doc;*.docx")
+            ]
         )
         if filename:
             self.input_file.set(filename)
-            # Auto-suggest output filename
-            base_name = os.path.splitext(filename)[0]
-            self.output_file.set(f"{base_name}.pzip")
+            self.auto_suggest_output_file(filename)
+            self.log_message(f"Selected input file: {os.path.basename(filename)}")
+    
+    def auto_suggest_output_file(self, input_path):
+        """Auto-suggest output filename based on input file."""
+        base_name, ext = os.path.splitext(input_path)
+        
+        if ext.lower() == '.pzip':
+            # Decompression: remove .pzip extension
+            suggested_output = base_name
+            self.log_message("Detected .pzip file - ready for decompression")
+        else:
+            # Compression: add .pzip extension
+            suggested_output = f"{base_name}.pzip"
+            self.log_message("Detected regular file - ready for compression")
+        
+        self.output_file.set(suggested_output)
     
     def browse_output_file(self):
         """Open file dialog for output file selection."""
-        input_path = self.input_file.get()
-        if input_path:
-            default_name = os.path.splitext(input_path)[0] + ".pzip"
-        else:
-            default_name = "compressed.pzip"
+        input_path = self.input_file.get().strip()
         
-        filename = filedialog.asksaveasfilename(
-            title="Save compressed file as",
-            defaultextension=".pzip",
-            filetypes=[("PZIP files", "*.pzip"), ("All files", "*.*")],
-            initialvalue=os.path.basename(default_name)
-        )
+        if input_path.lower().endswith('.pzip'):
+            # Decompression case
+            base_name = os.path.splitext(input_path)[0]
+            filename = filedialog.asksaveasfilename(
+                title="Save decompressed file as",
+                filetypes=[("All files", "*.*")],
+                initialfile=os.path.basename(base_name)  # Fixed: was initialvalue
+            )
+        else:
+            # Compression case
+            if input_path:
+                base_name = os.path.splitext(input_path)[0]
+                default_name = f"{os.path.basename(base_name)}.pzip"
+            else:
+                default_name = "compressed.pzip"
+            
+            filename = filedialog.asksaveasfilename(
+                title="Save compressed file as",
+                defaultextension=".pzip",
+                filetypes=[("PZIP files", "*.pzip"), ("All files", "*.*")],
+                initialfile=default_name  # Fixed: was initialvalue
+            )
+        
         if filename:
             self.output_file.set(filename)
+            self.log_message(f"Output will be saved as: {os.path.basename(filename)}")
     
     def get_chunk_size_bytes(self) -> int:
         """Convert chunk size string to bytes."""
@@ -172,13 +221,15 @@ class CompressionGUI:
                     _, message, percentage = item
                     self.status_var.set(message)
                     self.progress_var.set(percentage)
-                    self.log_message(message)
+                    if not message.startswith("Error"):
+                        self.log_message(message)
                 elif item[0] == 'complete':
                     _, success, message = item
                     self.status_var.set(message)
                     self.progress_var.set(100 if success else 0)
                     self.log_message(message)
                     self.enable_buttons()
+                    
                     if success:
                         messagebox.showinfo("Success", message)
                     else:
@@ -193,32 +244,56 @@ class CompressionGUI:
         """Disable action buttons during operation."""
         self.compress_btn.config(state='disabled')
         self.decompress_btn.config(state='disabled')
+        self.quick_decompress_btn.config(state='disabled')
     
     def enable_buttons(self):
         """Enable action buttons after operation."""
         self.compress_btn.config(state='normal')
         self.decompress_btn.config(state='normal')
+        self.quick_decompress_btn.config(state='normal')
+    
+    def validate_files(self, input_path, output_path, operation):
+        """Validate input and output files for the operation."""
+        if not input_path or not output_path:
+            return False, "Please select both input and output files."
+        
+        if not os.path.exists(input_path):
+            return False, "Input file does not exist."
+        
+        if operation == 'compress':
+            if input_path.lower().endswith('.pzip'):
+                return False, "Cannot compress a .pzip file. Use decompress instead."
+        elif operation == 'decompress':
+            if not input_path.lower().endswith('.pzip'):
+                return False, "Can only decompress .pzip files."
+        
+        # Check if input and output are the same
+        if os.path.abspath(input_path) == os.path.abspath(output_path):
+            return False, "Input and output files cannot be the same."
+        
+        return True, "Validation passed"
     
     def start_compression(self):
         """Start compression in background thread."""
         input_path = self.input_file.get().strip()
         output_path = self.output_file.get().strip()
         
-        if not input_path or not output_path:
-            messagebox.showerror("Error", "Please select both input and output files.")
-            return
-        
-        if not os.path.exists(input_path):
-            messagebox.showerror("Error", "Input file does not exist.")
+        # Validate files
+        valid, message = self.validate_files(input_path, output_path, 'compress')
+        if not valid:
+            messagebox.showerror("Validation Error", message)
             return
         
         # Update compressor chunk size
         chunk_size = self.get_chunk_size_bytes()
         self.compressor = SequentialCompressor(chunk_size)
         
+        self.current_operation = 'compress'
         self.disable_buttons()
         self.progress_var.set(0)
         self.log_message(f"Starting compression of: {os.path.basename(input_path)}")
+        self.log_message(f"Output: {os.path.basename(output_path)}")
+        self.log_message(f"Chunk size: {self.chunk_size_var.get()}")
         
         # Start compression in background thread
         thread = threading.Thread(target=self._compression_worker, 
@@ -229,32 +304,60 @@ class CompressionGUI:
     def start_decompression(self):
         """Start decompression in background thread."""
         input_path = self.input_file.get().strip()
+        output_path = self.output_file.get().strip()
         
-        if not input_path or not input_path.endswith('.pzip'):
-            messagebox.showerror("Error", "Please select a .pzip file to decompress.")
+        # Validate files
+        valid, message = self.validate_files(input_path, output_path, 'decompress')
+        if not valid:
+            messagebox.showerror("Validation Error", message)
             return
         
-        if not os.path.exists(input_path):
-            messagebox.showerror("Error", "Input file does not exist.")
-            return
-        
-        # Auto-suggest output filename
-        base_name = os.path.splitext(input_path)[0]
-        output_path = filedialog.asksaveasfilename(
-            title="Save decompressed file as",
-            initialvalue=os.path.basename(base_name)
-        )
-        
-        if not output_path:
-            return
-        
+        self.current_operation = 'decompress'
         self.disable_buttons()
         self.progress_var.set(0)
         self.log_message(f"Starting decompression of: {os.path.basename(input_path)}")
+        self.log_message(f"Output: {os.path.basename(output_path)}")
         
         # Start decompression in background thread
         thread = threading.Thread(target=self._decompression_worker, 
                                  args=(input_path, output_path))
+        thread.daemon = True
+        thread.start()
+    
+    def quick_decompress(self):
+        """Quick decompress - automatically select .pzip file and output location."""
+        pzip_file = filedialog.askopenfilename(
+            title="Select .pzip file to decompress",
+            filetypes=[("PZIP files", "*.pzip"), ("All files", "*.*")]
+        )
+        
+        if not pzip_file:
+            return
+        
+        # Auto-suggest output filename (remove .pzip extension)
+        base_name = os.path.splitext(pzip_file)[0]
+        output_file = filedialog.asksaveasfilename(
+            title="Save decompressed file as",
+            initialfile=os.path.basename(base_name),  # Fixed: was initialvalue
+            filetypes=[("All files", "*.*")]
+        )
+        
+        if not output_file:
+            return
+        
+        # Set the fields and start decompression
+        self.input_file.set(pzip_file)
+        self.output_file.set(output_file)
+        
+        self.log_message(f"Quick decompress: {os.path.basename(pzip_file)} → {os.path.basename(output_file)}")
+        
+        self.current_operation = 'decompress'
+        self.disable_buttons()
+        self.progress_var.set(0)
+        
+        # Start decompression in background thread
+        thread = threading.Thread(target=self._decompression_worker, 
+                                 args=(pzip_file, output_file))
         thread.daemon = True
         thread.start()
     
@@ -267,9 +370,9 @@ class CompressionGUI:
                 original_size = os.path.getsize(input_path)
                 compressed_size = os.path.getsize(output_path)
                 ratio = (1 - compressed_size / original_size) * 100
-                message = f"Compression completed! Saved {ratio:.1f}% space."
+                message = f"Compression completed! Original: {original_size:,} bytes, Compressed: {compressed_size:,} bytes. Saved {ratio:.1f}% space."
             else:
-                message = "Compression failed."
+                message = "Compression failed. Check the log for details."
             
             self.progress_queue.put(('complete', success, message))
             
@@ -281,7 +384,12 @@ class CompressionGUI:
         try:
             success = self.compressor.decompress_file(input_path, output_path, 
                                                      self.progress_callback)
-            message = "Decompression completed!" if success else "Decompression failed."
+            if success:
+                decompressed_size = os.path.getsize(output_path)
+                message = f"Decompression completed! Output size: {decompressed_size:,} bytes."
+            else:
+                message = "Decompression failed. Check the log for details."
+            
             self.progress_queue.put(('complete', success, message))
             
         except Exception as e:
